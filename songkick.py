@@ -3,7 +3,7 @@ from requests import session
 from bs4 import BeautifulSoup as bs
 
 loginurl = 'https://accounts.songkick.com/session'
-homeurl = 'https://www.songkick.com/home'
+homeurl = 'https://www.songkick.com/tracker/artists'
 tasteurl = 'https://www.songkick.com/taste_imports/lastfm'
 
 def get_auth_tokens(soup):
