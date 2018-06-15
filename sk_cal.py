@@ -61,7 +61,11 @@ def get_events(service, q):
         if msg['id'] == state['latest_checked']:
             break
         email = service.get(userId='me', id=msg['id']).execute()
-        events.extend(parse_email(email)['events'])
+        msg_events = parse_email(email)['events']
+        for event in msg_events:
+            # for debugging usage later
+            event['source_msg_id'] = msg['id']
+        events.extend(msg_events)
 
     state['latest_checked'] = msgs[0]['id']
     return events
@@ -77,7 +81,7 @@ def parse_email(email):
         if comment.title() == DATE:
             events.append({'date': comment.findNext('td').text.strip()})
         elif comment.title() == HEADLINER:
-            events[-1]['artist'] = comment.findNext('span').text.strip()
+            events[-1]['artists'] = comment.findNext('div').text.strip()
         elif comment.title() == VENUE:
             events[-1]['venue'] = comment.findNext('div').text.strip()
         elif comment.title() == BUY_TIX:
@@ -116,7 +120,10 @@ def get_services():
             'calendar': discovery.build('calendar', 'v3', http=http)}
 
 def try_sk_tickets(url):
-    soup = BS(urlopen(url).read(), 'html.parser')
+    try:
+        soup = BS(urlopen(url).read(), 'html.parser')
+    except Exception as e:
+        return 'Error: %s'.format(e.message), 'http://'
     div = soup.find('div', id='tickets')
     if div is not None:
         return 'Buy Tickets', div.find('a')['href']
@@ -138,15 +145,24 @@ def main(args):
 
     
     for event in get_events(msgserv.users().messages(), 'label:songkick'):
-        print u'{date}: {artist} at {venue}'.format(**event)
+        print u'{date}: {artists} at {venue}'.format(**event)
         if args.update_cal:
-            when = dt.strptime(event['date'].split(' ', 1)[1], '%d %B %Y')
-            start = when.strftime('%Y-%m-%d')
-            end = (when + timedelta(1)).strftime('%Y-%m-%d')
+            def todate(s):
+                return dt.strptime(s.strip().split(' ', 1)[1], '%d %B %Y')
+            when = event['date'].split(u'\u2013')
+            when[0] = todate(when[0])
+            if len(when) == 1:
+                # one-day event (this is the norm)
+                when.append(when[0] + timedelta(1))
+            else:
+                # multi-day event with start/end seperated by \u2013
+                when[1] = todate(when[1])
+            start = when[0].strftime('%Y-%m-%d')
+            end = when[1].strftime('%Y-%m-%d')
             txt, link = try_sk_tickets(event['link'])
             if link.startswith('/'):
                 link = 'https://www.songkick.com' + link
-            cal_event = {'summary': event['artist'],
+            cal_event = {'summary': event['artists'],
                          'location': event['venue'],
                          'start': {'date': start},
                          'end': {'date': end},
