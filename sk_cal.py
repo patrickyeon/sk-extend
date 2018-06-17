@@ -8,11 +8,9 @@ import os
 import string
 
 from apiclient import discovery
-from bs4 import BeautifulSoup as BS
-from bs4 import Comment
+from bs4 import BeautifulSoup as BS, Comment
 from datetime import datetime as dt, timedelta
-from oauth2client import client
-from oauth2client import tools
+from oauth2client import client, tools
 from oauth2client.file import Storage
 from urllib2 import urlopen
 
@@ -20,13 +18,16 @@ SCOPES = ('https://www.googleapis.com/auth/gmail.readonly '
           + 'https://www.googleapis.com/auth/calendar')
 CLIENT_SECRET_FILE = 'client_secret.json'
 STATE = 'sk_state.json'
+
+# comments that we track inside event blocks
 DATE = ' Event Date '
 HEADLINER = ' Event Headliner '
 VENUE = ' Event Venue '
 BUY_TIX = ' But Tickets Button ' # lol typos are forever
 TAGS = [DATE, HEADLINER, VENUE, BUY_TIX]
-translator = string.maketrans('-_', '+/')
+
 state = {'latest_checked': ''}
+
 
 def get_credentials():
     """Gets valid user credentials from storage.
@@ -37,23 +38,20 @@ def get_credentials():
     Returns:
         Credentials, the obtained credential.
     """
-    home_dir = os.path.expanduser('~')
-    credential_dir = os.path.join(home_dir, '.credentials')
-    if not os.path.exists(credential_dir):
-        os.makedirs(credential_dir)
-    credential_path = os.path.join(credential_dir, 'gmail-python.json')
+    credential_file = 'sk_cal_credentials.json'
 
-    store = Storage(credential_path)
+    store = Storage(credential_file)
     credentials = store.get()
     if not credentials or credentials.invalid:
         flow = client.flow_from_clientsecrets(CLIENT_SECRET_FILE, SCOPES)
-        flow.user_agent = 'skstate'
+        flow.user_agent = 'sk_cal'
         credentials = tools.run_flow(flow, store)
     return credentials
 
 
 def get_events(service, q):
-    global state
+    # return all the events in emails found by query `q`
+    global state # tracking most-recently-seen email
     events = []
     msgs = service.list(userId='me', q=q).execute()['messages']
 
@@ -70,10 +68,15 @@ def get_events(service, q):
     state['latest_checked'] = msgs[0]['id']
     return events
 
+
 def parse_email(email):
+    #  parse the events (date, artists, venue, ticket purchase link) out of
+    # an email
     bodytxt = str(email['payload']['parts'][1]['body']['data'])
-    body = BS(base64.b64decode(bodytxt.translate(translator)),
-              'html.parser')
+    bodytxt = bodytxt.translate(string.maketrans('-_', '+/'))
+    body = BS(base64.b64decode(bodytxt), 'html.parser')
+    #  the html is messy, but the most straightforward scraping that I've worked
+    # out is based on comment tags.
     comments = body.find_all(string=lambda s: (isinstance(s, Comment)
                                                and s.title() in TAGS))
     events = []
@@ -88,7 +91,9 @@ def parse_email(email):
             events[-1]['link'] = comment.findNext('a')['href']
     return {'events': events, 'soup': body}
 
+
 def get_calid(service, name):
+    # from a calendar name, get the google id for it
     calendars = service.calendarList().list().execute()
     ids = [item['id'] for item in calendars['items']
            if item['summary'] == name]
@@ -98,10 +103,14 @@ def get_calid(service, name):
         return ids[0]
     return ids
 
+
 def clear_cal(service, name):
+    # delete all the events in a calendar
     clear_id = get_calid(service, name)
+
     # For some reason this doesn't work.
     #calserv.calendars().clear(calendarId=clear_id).execute()
+
     tok = None
     while True:
         entries = service.events().list(calendarId=clear_id,
@@ -113,13 +122,21 @@ def clear_cal(service, name):
         if not tok:
             break
 
+
 def get_services():
+    # get the gmail and calendar service objects
     credentials = get_credentials()
     http = credentials.authorize(httplib2.Http())
     return {'gmail': discovery.build('gmail', 'v1', http=http),
             'calendar': discovery.build('calendar', 'v3', http=http)}
 
+
 def try_sk_tickets(url):
+    # try to follow "buy tickets" links to give a direct link on the calendar
+
+    #  This will not strip out any tracking info, referer link, or whatever.
+    # That behaviour is by design. Songkick is providing value to me, I want
+    # them to be rewarded for that.
     try:
         soup = BS(urlopen(url).read(), 'html.parser')
     except Exception as e:
@@ -128,6 +145,7 @@ def try_sk_tickets(url):
     if div is not None:
         return 'Buy Tickets', div.find('a')['href']
     else:
+        # well at least give them the Songkick page.
         return 'No ticket info. Songkick Page', url
 
 def main(args):
@@ -143,8 +161,7 @@ def main(args):
     if args.clear_cal:
         clear_cal(calserv, args.clear_cal)
 
-    
-    for event in get_events(msgserv.users().messages(), 'label:songkick'):
+    for event in get_events(msgserv.users().messages(), args.gmail_search):
         print u'{date}: {artists} at {venue}'.format(**event)
         if args.update_cal:
             def todate(s):
@@ -153,10 +170,12 @@ def main(args):
             when[0] = todate(when[0])
             if len(when) == 1:
                 # one-day event (this is the norm)
+                # can't have a calendar event span 0 days
                 when.append(when[0] + timedelta(1))
             else:
                 # multi-day event with start/end seperated by \u2013
-                when[1] = todate(when[1])
+                # also need to add a day so that the event spans properly
+                when[1] = todate(when[1]) + timedelta(1)
             start = when[0].strftime('%Y-%m-%d')
             end = when[1].strftime('%Y-%m-%d')
             txt, link = try_sk_tickets(event['link'])
@@ -176,13 +195,18 @@ def main(args):
 
 
 if __name__ == '__main__':
-    ap = argparse.ArgumentParser()
+    #  this doesn't seem to help. If we need to do the OAuth dance, it'll still
+    # complain about not recognizing our own args. To fix this, just run once
+    # with no args to get the credentials, then use as normal after that.
+    ap = argparse.ArgumentParser(parents=[tools.argparser])
     ap.add_argument('--no-save-state', action='store_true',
                     help='do not update state for next run')
     ap.add_argument('--update-cal', help='calendar name to update',
                     default='skstate')
     ap.add_argument('--clear-cal',
                     help='calendar name to clear out (before any update)')
+    ap.add_argument('--gmail-search', default='label:songkick',
+                    help='search string to use to find emails from Songkick')
     args = ap.parse_args()
 
     main(args)
