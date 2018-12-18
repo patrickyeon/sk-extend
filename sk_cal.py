@@ -142,7 +142,7 @@ def try_sk_tickets(url):
     except Exception as e:
         return 'Error: %s'.format(e.message), 'http://'
     div = soup.find('div', id='tickets')
-    if div is not None and div.find('a') is not None:
+    if div and div.find('a') and 'href' in div.find('a'):
         return 'Buy Tickets', div.find('a')['href']
     else:
         # well at least give them the Songkick page.
