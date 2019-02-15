@@ -23,8 +23,10 @@ STATE = 'sk_state.json'
 DATE = ' Event Date '
 HEADLINER = ' Event Headliner '
 VENUE = ' Event Venue '
-BUY_TIX = ' But Tickets Button ' # lol typos are forever
-TAGS = [DATE, HEADLINER, VENUE, BUY_TIX]
+BUT_TIX = ' But Tickets Button ' # lol typos are forever
+BUY_TIX = ' Buy Tickets Button ' # oh they fixed the typo?
+DETAILS = ' Event Details Button '
+TAGS = [DATE, HEADLINER, VENUE, BUT_TIX, BUY_TIX, DETAILS]
 
 state = {'latest_checked': ''}
 
@@ -87,7 +89,7 @@ def parse_email(email):
             events[-1]['artists'] = comment.findNext('div').text.strip()
         elif comment.title() == VENUE:
             events[-1]['venue'] = comment.findNext('div').text.strip()
-        elif comment.title() == BUY_TIX:
+        elif comment.title() in (BUY_TIX, BUT_TIX, DETAILS):
             events[-1]['link'] = comment.findNext('a')['href']
     return {'events': events, 'soup': body}
 
