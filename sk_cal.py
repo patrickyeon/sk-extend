@@ -77,6 +77,31 @@ def parse_email(email):
     bodytxt = str(email['payload']['parts'][1]['body']['data'])
     bodytxt = bodytxt.translate(string.maketrans('-_', '+/'))
     body = BS(base64.b64decode(bodytxt), 'html.parser')
+    if len(body.findAll('div', {'class': 'artist-header'})):
+        return parse_new(body)
+    else:
+        return parse_old(body)
+
+def parse_new(body):
+    events = []
+    headliners = body.find_all('span', {'class': 'headliners'})
+    # TODO for events with piles of artists, I think just festivals, there's no
+    #      headliners tag, so bleagh. I'm just dropping that for now
+    for headliner in headliners:
+        show = headliner.findParent().findParent()
+        supports = ''.join([tag.text for tag in
+                            show.findAll('span', {'class': 'supports'})])
+        dv = [s.strip() for s in show.findAll('span')[-1].text.split('\r\n')]
+        date, venue = [s for s in dv if len(s)]
+        link = show.findNext('a', {'class': 'button'})['href']
+        events.append({'artists': headliner.text + supports,
+                       'venue': venue,
+                       'date': date,
+                       'link': link
+                      })
+    return {'events': events, 'soup': body}
+
+def parse_old(body):
     #  the html is messy, but the most straightforward scraping that I've worked
     # out is based on comment tags.
     comments = body.find_all(string=lambda s: (isinstance(s, Comment)
@@ -163,8 +188,15 @@ def main(args):
     if args.clear_cal:
         clear_cal(calserv, args.clear_cal)
 
-    for event in get_events(msgserv.users().messages(), args.gmail_search):
-        print u'{date}: {artists} at {venue}'.format(**event)
+    evts = get_events(msgserv.users().messages(), args.gmail_search)
+    print('working {} events for {}'.format(len(evts), args.gmail_search))
+    for event in evts:
+        logstr = u'{date}: {artists} at {venue}'.format(**event)
+        try:
+            print(logstr)
+        except UnicodeEncodeError:
+            # ugh whatever
+            print(logstr.encode('ascii', 'replace'))
         if args.update_cal:
             def todate(s):
                 return dt.strptime(s.strip().split(' ', 1)[1], '%d %B %Y')
